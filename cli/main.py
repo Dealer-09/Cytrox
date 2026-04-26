@@ -108,7 +108,7 @@ def clone(
         console.print(f"[bold cyan]◇[/bold cyan] [bold red]⚠️  Critical Issues Found![/bold red] {summary}")
         
         if detailed_issues:
-            if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to see the details?"):
+            if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to see the details?", default=False):
                 table = Table(show_header=True, header_style="bold magenta", border_style="cyan")
                 table.add_column("Severity", style="red", width=12)
                 table.add_column("Category", style="yellow", width=15)
@@ -124,8 +124,9 @@ def clone(
                 if len(detailed_issues) > 15:
                     console.print(f"[bold cyan]│[/bold cyan] [bold yellow]...and {len(detailed_issues) - 15} more issues hidden.[/bold yellow]")
             
-            if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to generate a detailed report?"):
+            if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to generate a detailed report?", default=False):
                 from report import generate_html_report
+                import webbrowser
                 # Write JSON
                 with open("reposhield_report.json", "w", encoding="utf-8") as f:
                     json.dump(findings, f, indent=2)
@@ -137,10 +138,21 @@ def clone(
                     f.write(html_content)
                     
                 console.print(f"[bold green]✅ Here is your generated report: file:///{report_path}[/bold green]")
-                console.print("[bold cyan]│[/bold cyan] (Ctrl+Click to open in your default browser)")
+                console.print("[bold cyan]│[/bold cyan] Opening report in your default web browser...")
                 console.print("[bold cyan]│[/bold cyan]")
+                try:
+                    webbrowser.open(f"file:///{report_path}")
+                except Exception:
+                    pass
         
-        if Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to clone this to your host?"):
+        from config import load_config
+        config = load_config()
+        if config.get("strict_mode", False):
+            console.print("[bold cyan]│[/bold cyan] [bold red]STRICT MODE ENABLED: Automatically blocking clone.[/bold red]")
+            console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
+            raise typer.Exit(code=1)
+            
+        if Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to clone this to your host?", default=False):
             subprocess.run(git_cmd)
         else:
             console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
@@ -204,6 +216,45 @@ function git {{
         
     console.print(f"[bold green]✅ Interceptor installed to {profile_path}[/bold green]")
     console.print("Please restart your terminal for the changes to take effect.")
+
+@app.command()
+def configure():
+    from config import load_config, save_config
+    from rich.prompt import Prompt
+    
+    config = load_config()
+    console.print("[bold cyan]◇[/bold cyan] 🛡️  [bold blue]RepoShield Security Policy Configuration[/bold blue]")
+    
+    # Configure Ignored Severities
+    current_sev = ", ".join(config.get("ignored_severities", [])) or "None"
+    console.print(f"[bold cyan]│[/bold cyan] Current ignored severities: [yellow]{current_sev}[/yellow]")
+    if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to ignore specific severities (e.g. MEDIUM)?", default=False):
+        sevs = Prompt.ask("[bold cyan]│[/bold cyan] Enter severities to ignore (comma-separated, or leave blank)")
+        if sevs.strip():
+            config["ignored_severities"] = [s.strip().upper() for s in sevs.split(",")]
+        else:
+            config["ignored_severities"] = []
+            
+    # Configure Ignored Categories
+    current_cat = ", ".join(config.get("ignored_categories", [])) or "None"
+    console.print(f"[bold cyan]│[/bold cyan] Current ignored categories: [yellow]{current_cat}[/yellow]")
+    if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to ignore specific categories (e.g. Python SAST)?", default=False):
+        cats = Prompt.ask("[bold cyan]│[/bold cyan] Enter categories to ignore (comma-separated, or leave blank)")
+        if cats.strip():
+            config["ignored_categories"] = [c.strip() for c in cats.split(",")]
+        else:
+            config["ignored_categories"] = []
+            
+    # Configure Strict Mode
+    current_strict = config.get("strict_mode", False)
+    console.print(f"[bold cyan]│[/bold cyan] Current Strict Mode: [yellow]{'Enabled' if current_strict else 'Disabled'}[/yellow]")
+    if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to enable Strict Mode (automatically blocks clones without asking)?", default=current_strict):
+        config["strict_mode"] = True
+    else:
+        config["strict_mode"] = False
+        
+    save_config(config)
+    console.print("[bold green]✅ Security policies updated successfully![/bold green]")
 
 if __name__ == "__main__":
     app()

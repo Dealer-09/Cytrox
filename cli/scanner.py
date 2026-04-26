@@ -74,6 +74,11 @@ def parse_findings(findings: dict):
     if "error" in findings:
         return False, findings["error"], []
         
+    from config import load_config
+    config = load_config()
+    ignored_severities = [s.upper() for s in config.get("ignored_severities", [])]
+    ignored_categories = config.get("ignored_categories", [])
+        
     detailed_issues = []
     
     # Gitleaks results
@@ -107,12 +112,21 @@ def parse_findings(findings: dict):
                 "message": msg
             })
             
-    if not detailed_issues:
+    # Apply filtering based on policy
+    filtered_issues = []
+    for issue in detailed_issues:
+        if issue["severity"] in ignored_severities:
+            continue
+        if issue["category"] in ignored_categories:
+            continue
+        filtered_issues.append(issue)
+            
+    if not filtered_issues:
         return True, "No issues found", []
         
-    num_secrets = len([i for i in detailed_issues if i["category"] == "Secret"])
-    num_sast = len([i for i in detailed_issues if i["category"] == "SAST"])
-    num_bandit = len([i for i in detailed_issues if i["category"] == "Python SAST"])
+    num_secrets = len([i for i in filtered_issues if i["category"] == "Secret"])
+    num_sast = len([i for i in filtered_issues if i["category"] == "SAST"])
+    num_bandit = len([i for i in filtered_issues if i["category"] == "Python SAST"])
     
     summary = f"Found {num_secrets} secrets, {num_sast} SAST vulnerabilities, and {num_bandit} Python specific issues."
-    return False, summary, detailed_issues
+    return False, summary, filtered_issues
