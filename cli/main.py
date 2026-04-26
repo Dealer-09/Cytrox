@@ -256,5 +256,69 @@ def configure():
     save_config(config)
     console.print("[bold green]✅ Security policies updated successfully![/bold green]")
 
+@app.command()
+def uninstall():
+    """
+    Removes RepoShield's integration from PowerShell and deletes configuration files.
+    """
+    console.print("[bold cyan]◇[/bold cyan] [bold red]This will remove RepoShield's integration from your system.[/bold red]")
+    if not Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to proceed?"):
+        return
+
+    # 1. Remove from PowerShell profile
+    documents_dir = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), 'Documents')
+    ps_profile = os.path.join(documents_dir, 'WindowsPowerShell', 'Microsoft.PowerShell_profile.ps1')
+    profile_path = Path(ps_profile)
+
+    if profile_path.exists():
+        content = profile_path.read_text(encoding="utf-8")
+        if "# RepoShield" in content:
+            console.print("[bold cyan]│[/bold cyan] Removing PowerShell interceptors...")
+            
+            import re
+            # Pattern to match any RepoShield block in the profile
+            # We look for either Global Command or Git Interceptor markers and their respective functions
+            patterns = [
+                r"\s*# RepoShield Global Command.*?function reposhield \{.*?\}\s*",
+                r"\s*# RepoShield Git Interceptor.*?function git \{.*?\}\s*"
+            ]
+            
+            new_content = content
+            for p in patterns:
+                new_content = re.sub(p, "\n", new_content, flags=re.DOTALL)
+            
+            profile_path.write_text(new_content.strip() + "\n", encoding="utf-8")
+            console.print("[bold green]✅ PowerShell profile cleaned.[/bold green]")
+        else:
+            console.print("[bold yellow]│[/bold yellow] No RepoShield integration found in PowerShell profile.")
+    else:
+        console.print("[bold yellow]│[/bold yellow] PowerShell profile not found. Skipping profile cleanup.")
+
+    # 2. Delete config directory
+    home = Path(os.path.expanduser("~"))
+    reposhield_dir = home / ".reposhield"
+    if reposhield_dir.exists():
+        import shutil
+        try:
+            shutil.rmtree(reposhield_dir)
+            console.print("[bold green]✅ Configuration directory (~/.reposhield) removed.[/bold green]")
+        except Exception as e:
+            console.print(f"[bold red]❌ Failed to remove config directory: {e}[/bold red]")
+
+    # 3. Docker cleanup
+    if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to remove the Docker scanner image to free up space?", default=True):
+        try:
+            import docker
+            client = docker.from_env()
+            from scanner import IMAGE_NAME
+            console.print(f"[bold cyan]│[/bold cyan] Removing Docker image {IMAGE_NAME}...")
+            client.images.remove(IMAGE_NAME, force=True)
+            console.print(f"[bold green]✅ Docker image removed.[/bold green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Could not remove Docker image: {e}[/yellow]")
+
+    console.print("\n[bold green]✨ RepoShield has been successfully uninstalled![/bold green]")
+    console.print("[bold yellow]Note:[/bold yellow] You can now safely delete the executable and this source folder.")
+
 if __name__ == "__main__":
     app()

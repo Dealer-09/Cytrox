@@ -33,6 +33,14 @@
    ```
 4. Restart your terminal.
 
+### Uninstallation
+
+To remove RepoShield's integration and clean up your system:
+```powershell
+.\reposhield.exe uninstall
+```
+This will remove the PowerShell alias, delete configuration files, and optionally remove the Docker image.
+
 ### Usage
 
 Once installed, RepoShield automatically protects you whenever you clone:
