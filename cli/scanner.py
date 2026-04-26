@@ -69,29 +69,50 @@ def run_scan(repo_url: str) -> dict:
 
 def parse_findings(findings: dict):
     """
-    Counts the number of critical/high findings to determine if it's safe.
+    Returns a tuple: (is_clean, summary_text, detailed_issues_list)
     """
     if "error" in findings:
-        return False, findings["error"]
+        return False, findings["error"], []
         
-    num_secrets = len(findings.get("secrets", []))
+    detailed_issues = []
+    
+    # Gitleaks results
+    for r in findings.get("secrets", []):
+        detailed_issues.append({
+            "category": "Secret",
+            "severity": "CRITICAL",
+            "message": r.get("Description", "Hardcoded Secret")
+        })
     
     # Semgrep results
-    num_sast_high = 0
     for r in findings.get("sast", []):
-        if r.get("extra", {}).get("severity") in ("ERROR", "WARNING"):
-            num_sast_high += 1
+        severity = r.get("extra", {}).get("severity", "UNKNOWN")
+        if severity in ("ERROR", "WARNING"):
+            # Map ERROR to HIGH for consistency in the table
+            display_severity = "HIGH" if severity == "ERROR" else "MEDIUM"
+            detailed_issues.append({
+                "category": "SAST",
+                "severity": display_severity,
+                "message": r.get("check_id", "Vulnerability Detected")
+            })
             
     # Bandit results
-    num_bandit_high = 0
     for r in findings.get("bandit", []):
-        if r.get("issue_severity") in ("HIGH", "MEDIUM"):
-            num_bandit_high += 1
+        severity = r.get("issue_severity", "UNKNOWN")
+        if severity in ("HIGH", "MEDIUM"):
+            msg = f"{r.get('test_name', 'Security Issue')}: {r.get('issue_text', '')}"
+            detailed_issues.append({
+                "category": "Python SAST",
+                "severity": severity,
+                "message": msg
+            })
             
-    total_issues = num_secrets + num_sast_high + num_bandit_high
-    
-    if total_issues == 0:
-        return True, "No issues found"
+    if not detailed_issues:
+        return True, "No issues found", []
         
-    summary = f"Found {num_secrets} secrets, {num_sast_high} SAST vulnerabilities, and {num_bandit_high} Python specific issues."
-    return False, summary
+    num_secrets = len([i for i in detailed_issues if i["category"] == "Secret"])
+    num_sast = len([i for i in detailed_issues if i["category"] == "SAST"])
+    num_bandit = len([i for i in detailed_issues if i["category"] == "Python SAST"])
+    
+    summary = f"Found {num_secrets} secrets, {num_sast} SAST vulnerabilities, and {num_bandit} Python specific issues."
+    return False, summary, detailed_issues

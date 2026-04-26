@@ -2,10 +2,12 @@ import typer
 import subprocess
 import sys
 import os
+import json
 from pathlib import Path
 from rich.console import Console
 from rich.prompt import Confirm
 from rich.panel import Panel
+from rich.table import Table
 
 app = typer.Typer(help="RepoShield: Zero-Trust Git Clone CLI")
 console = Console()
@@ -19,7 +21,7 @@ def get_gradient_banner():
         r"   / __ \/ ____/ __ \/ __ \       / ___// / / //  _/ ____// /    / __ \ ",
         r"  / /_/ / __/ / /_/ / / / / ____  \__ \/ /_/ / / // __/  / /    / / / / ",
         r" / _, _/ /___/ ____/ /_/ /  ___  ___/ / __  /_/ // /___ / /___ / /_/ /  ",
-        r"/_/ |_/_____/_/    \____//       ____/_/ /_//___/_____//_____//_____/   "
+        r"/_/ |_/_____/_/    \____/        ____/_/ /_//___/_____//_____//_____/   "
     ]
     
     text = Text()
@@ -79,8 +81,11 @@ RepoShield requires Docker to safely isolate and scan code before it touches you
         raise typer.Exit(code=1)
     console.print("[bold green]✅ Docker detected![/bold green]")
 
-@app.command()
-def clone(repo_url: str):
+@app.command(context_settings={"ignore_unknown_options": True})
+def clone(
+    ctx: typer.Context,
+    repo_url: str
+):
     if not check_docker():
         prompt_docker_installation()
         
@@ -92,18 +97,51 @@ def clone(repo_url: str):
     from scanner import run_scan, parse_findings
     findings = run_scan(repo_url)
     
-    is_clean, summary = parse_findings(findings)
+    is_clean, summary, detailed_issues = parse_findings(findings)
     
+    git_cmd = ["git", "clone", repo_url] + ctx.args
+
     if is_clean:
-        console.print("[bold cyan]│[/bold cyan]")
         console.print("[bold cyan]◇[/bold cyan] ✅ [bold green]Codebase is clean. Cloning to host...[/bold green]")
-        subprocess.run(["git", "clone", repo_url])
+        subprocess.run(git_cmd)
     else:
-        console.print("[bold cyan]│[/bold cyan]")
         console.print(f"[bold cyan]◇[/bold cyan] [bold red]⚠️  Critical Issues Found![/bold red] {summary}")
-        # Optionally print a table using rich
+        
+        if detailed_issues:
+            if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to see the details?"):
+                table = Table(show_header=True, header_style="bold magenta", border_style="cyan")
+                table.add_column("Severity", style="red", width=12)
+                table.add_column("Category", style="yellow", width=15)
+                table.add_column("Description", style="white")
+                
+                # Show up to 15 issues so we don't flood the terminal
+                for issue in detailed_issues[:15]:
+                    sev = issue['severity']
+                    severity_colored = f"[bold red]{sev}[/bold red]" if sev == "CRITICAL" else f"[red]{sev}[/red]"
+                    table.add_row(severity_colored, issue['category'], issue['message'])
+                
+                console.print(table)
+                if len(detailed_issues) > 15:
+                    console.print(f"[bold cyan]│[/bold cyan] [bold yellow]...and {len(detailed_issues) - 15} more issues hidden.[/bold yellow]")
+            
+            if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to generate a detailed report?"):
+                from report import generate_html_report
+                # Write JSON
+                with open("reposhield_report.json", "w", encoding="utf-8") as f:
+                    json.dump(findings, f, indent=2)
+                    
+                # Write HTML
+                html_content = generate_html_report(repo_url, detailed_issues, is_clean, summary)
+                report_path = os.path.abspath("reposhield_report.html").replace("\\", "/")
+                with open(report_path, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                    
+                console.print(f"[bold green]✅ Here is your generated report: file:///{report_path}[/bold green]")
+                console.print("[bold cyan]│[/bold cyan] (Ctrl+Click to open in your default browser)")
+                console.print("[bold cyan]│[/bold cyan]")
+        
         if Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to clone this to your host?"):
-            subprocess.run(["git", "clone", repo_url])
+            subprocess.run(git_cmd)
         else:
             console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
 
