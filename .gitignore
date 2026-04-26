@@ -69,6 +69,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.droplet
 .venv
 env/
 venv/
@@ -122,6 +123,11 @@ build/
 *.local
 .env.local
 .env.*.local
+
+# Bun
+# bun.lockb is intentionally tracked (like package-lock.json)
+# npm lockfile — not used, ignore if accidentally generated
+package-lock.json
 
 # Logs
 npm-debug.log*

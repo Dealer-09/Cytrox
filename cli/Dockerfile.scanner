@@ -1,0 +1,16 @@
+FROM zricethezav/gitleaks:latest AS gitleaks
+FROM python:3.11-slim
+
+# Install git for cloning
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+# Install python-based security tools
+RUN pip install --no-cache-dir semgrep bandit
+
+# Copy gitleaks binary from the official image
+COPY --from=gitleaks /usr/bin/gitleaks /usr/bin/gitleaks
+
+# Copy the orchestrator script
+COPY entrypoint.py /entrypoint.py
+
+ENTRYPOINT ["python", "/entrypoint.py"]
