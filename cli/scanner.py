@@ -11,9 +11,29 @@ def build_or_pull_image(client):
     except docker.errors.ImageNotFound:
         console.print("[yellow]Scanner image not found locally. Building from Dockerfile...[/yellow]")
         import os
-        dockerfile_path = os.path.dirname(os.path.abspath(__file__))
-        client.images.build(path=dockerfile_path, tag=IMAGE_NAME, rm=True)
-        console.print("[green]Scanner image built successfully.[/green]")
+        import sys
+        
+        # Determine base path for Dockerfile.scanner
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            # Running as compiled PyInstaller executable
+            base_path = os.path.join(sys._MEIPASS, 'cli')
+        else:
+            # Running as normal Python script
+            base_path = os.path.dirname(os.path.abspath(__file__))
+
+        dockerfile_name = "Dockerfile.scanner"
+        
+        try:
+            client.images.build(
+                path=base_path, 
+                dockerfile=dockerfile_name, 
+                tag=IMAGE_NAME, 
+                rm=True
+            )
+            console.print("[green]Scanner image built successfully.[/green]")
+        except Exception as e:
+            console.print(f"[bold red]Failed to build Docker image: {e}[/bold red]")
+            raise e
 
 def run_scan(repo_url: str) -> dict:
     """
