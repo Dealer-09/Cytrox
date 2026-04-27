@@ -12,6 +12,8 @@
 - **🏗️ Two-Container Handoff Architecture**: 
   - **Cloner Container**: Pulls the repository into an ephemeral Docker volume.
   - **Scanner Container**: Mounts the volume as read-only. Operates with `network_disabled=True`, memory caps, and dropped privileges for absolute Zero-Trust isolation.
+- **🔒 Air-Gapped SAST**: All security rules (Semgrep/Gitleaks) are baked directly into the Docker image, allowing for 100% offline scanning without internet access.
+- **⛓️ Resource Jailing**: Enforces strict CPU (0.5 cores) and Memory (512MB) limits to prevent "Zip Bomb" attacks or resource exhaustion.
 - **⚡ Parallel Execution**: Utilizes multithreading to run all security tools concurrently, massively speeding up the audit phase.
 - **🔍 Triple-Threat Scanning**: Executes **Semgrep**, **Bandit**, and **Gitleaks** to detect SAST vulnerabilities, Python-specific issues, and hardcoded secrets.
 - **🌈 Immersive UI**: Features a character-by-character gradient banner and modern CLI decorators.
@@ -78,6 +80,11 @@ reposhield configure
 
 ## 🔐 Zero-Trust Philosophy
 RepoShield treats every remote repository as potentially compromised. By requiring a successful sandbox scan before writing any data to your disk, it eliminates the risk of "clone-to-pwn" attacks and accidental secret leakage.
+
+Our core security pillars include:
+- **Protocol Enforcement**: Only `https://` and `git@` are permitted. Local file path injections or malicious protocols are blocked at the gates.
+- **Network Isolation**: The scanning engine operates in a complete network vacuum. It cannot "call home" or exfiltrate data, even if a scanning tool is compromised.
+- **Immutable Sandbox**: Scanners run on a read-only filesystem with dropped privileges, ensuring no persistent changes can be made to the container environment.
 
 ---
 *Built By [Dealer-09](https://github.com/Dealer-09) for a safer open-source ecosystem.*
