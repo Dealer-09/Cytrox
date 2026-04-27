@@ -25,7 +25,7 @@ def run_scanner(name, cmd, cwd, output_file):
 def clone_mode(repo_url):
     # Strict Validation
     if not repo_url.startswith(("https://", "git@")):
-        print(f"Invalid repository URL format. Only https:// and git@ are allowed.")
+        print("Invalid repository URL format. Only https:// and git@ are allowed.", file=sys.stderr)
         sys.exit(1)
 
     clone_dir = "/scan_repo/repo"
@@ -38,11 +38,11 @@ def clone_mode(repo_url):
             timeout=300
         )
         if clone_result.returncode != 0:
-            print(f"Failed to clone repository: {clone_result.stderr.strip()}")
+            print(f"Failed to clone repository: {clone_result.stderr.strip()}", file=sys.stderr)
             sys.exit(1)
         print("Clone successful")
     except subprocess.TimeoutExpired:
-        print("Git clone timed out after 300 seconds.")
+        print("Git clone timed out after 300 seconds.", file=sys.stderr)
         sys.exit(1)
 
 def scan_mode():

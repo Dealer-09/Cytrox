@@ -60,6 +60,7 @@ def run_scan(repo_url: str) -> dict:
                 command=["clone", repo_url],
                 remove=True,
                 network_disabled=False,
+                user="root",  # Run as root to write to the Docker volume
                 volumes={vol_name: {'bind': '/scan_repo', 'mode': 'rw'}}
             )
         except docker.errors.ContainerError as e:
