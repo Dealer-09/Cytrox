@@ -81,7 +81,7 @@ def run_scan(repo_url: str) -> dict:
                 nano_cpus=500000000,
                 network_disabled=True,
                 read_only=True,
-                tmpfs={"/tmp": ""},
+                tmpfs={"/tmp": "", "/home/scanner_user": ""},
                 cap_drop=["ALL"],
                 security_opt=["no-new-privileges:true"],
                 volumes={vol_name: {'bind': '/scan_repo', 'mode': 'ro'}}
@@ -127,6 +127,14 @@ def parse_findings(findings: dict):
     ignored_categories = config.get("ignored_categories", [])
         
     detailed_issues = []
+    
+    # Check for scan errors
+    for err in findings.get("scan_errors", []):
+        detailed_issues.append({
+            "category": "Scanner Error",
+            "severity": "HIGH",
+            "message": err
+        })
     
     # Gitleaks results
     for r in findings.get("secrets", []):

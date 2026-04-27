@@ -1,11 +1,12 @@
 FROM zricethezav/gitleaks:latest AS gitleaks
 FROM python:3.11-slim
 
-# Install git for cloning
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-
-# Install python-based security tools
-RUN pip install --no-cache-dir semgrep bandit
+# Install git, scanners, and bake Semgrep rules for offline Zero-Trust scanning
+RUN apt-get update && apt-get install -y git wget && \
+    pip install --no-cache-dir semgrep bandit && \
+    mkdir -p /semgrep-rules && \
+    wget -O /semgrep-rules/default.yml https://semgrep.dev/c/p/default && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy gitleaks binary from the official image
 COPY --from=gitleaks /usr/bin/gitleaks /usr/bin/gitleaks

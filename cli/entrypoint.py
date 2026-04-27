@@ -5,13 +5,16 @@ import os
 import concurrent.futures
 
 def run_scanner(name, cmd, cwd, output_file):
+    env = os.environ.copy()
+    env["HOME"] = "/tmp"  # Use writable tmpfs for caches/configs
     try:
         result = subprocess.run(
             cmd,
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=300
+            timeout=300,
+            env=env
         )
         if os.path.exists(output_file):
             with open(output_file, "r") as f:
@@ -61,7 +64,7 @@ def scan_mode():
 
     scanners = [
         ("secrets", ["gitleaks", "detect", "--no-git", "--report-format", "json", "--report-path", "/tmp/gitleaks.json"], "/tmp/gitleaks.json"),
-        ("sast", ["semgrep", "scan", "--config=auto", "--json", "-o", "/tmp/semgrep.json"], "/tmp/semgrep.json"),
+        ("sast", ["semgrep", "scan", "--config=/semgrep-rules/default.yml", "--json", "-o", "/tmp/semgrep.json"], "/tmp/semgrep.json"),
         ("bandit", ["bandit", "-r", ".", "-f", "json", "-o", "/tmp/bandit.json"], "/tmp/bandit.json")
     ]
 

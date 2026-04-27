@@ -36,7 +36,7 @@ def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, s
             </tr>
         """
         
-    html = f"""<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -142,4 +142,4 @@ def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, s
 </body>
 </html>
 """
-    return html
+    return html_content
