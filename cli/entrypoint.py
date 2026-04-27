@@ -2,79 +2,106 @@ import sys
 import subprocess
 import json
 import os
-import shutil
+import concurrent.futures
 
-def run_command(cmd, cwd=None):
+def run_scanner(name, cmd, cwd, output_file):
     try:
         result = subprocess.run(
             cmd,
             cwd=cwd,
             capture_output=True,
-            text=True
+            text=True,
+            timeout=300
         )
-        return result.stdout
+        if os.path.exists(output_file):
+            with open(output_file, "r") as f:
+                return name, json.load(f), None
+        return name, None, f"{name} failed or produced no output. Stderr: {result.stderr.strip()}"
+    except subprocess.TimeoutExpired:
+        return name, None, f"{name} scan timed out after 300 seconds."
     except Exception as e:
-        return ""
+        return name, None, f"{name} scan encountered an error: {str(e)}"
 
-def main():
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "No repository URL provided"}))
+def clone_mode(repo_url):
+    # Strict Validation
+    if not repo_url.startswith(("https://", "git@")):
+        print(f"Invalid repository URL format. Only https:// and git@ are allowed.")
         sys.exit(1)
 
-    repo_url = sys.argv[1]
-    clone_dir = "/scan_repo"
+    clone_dir = "/scan_repo/repo"
 
-    # Clone the repository
-    clone_result = subprocess.run(
-        ["git", "clone", "--depth", "1", repo_url, clone_dir],
-        capture_output=True,
-        text=True
-    )
+    try:
+        clone_result = subprocess.run(
+            ["git", "clone", "--depth", "1", repo_url, clone_dir],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        if clone_result.returncode != 0:
+            print(f"Failed to clone repository: {clone_result.stderr.strip()}")
+            sys.exit(1)
+        print("Clone successful")
+    except subprocess.TimeoutExpired:
+        print("Git clone timed out after 300 seconds.")
+        sys.exit(1)
 
-    if clone_result.returncode != 0:
-        print(json.dumps({"error": f"Failed to clone repository: {clone_result.stderr.strip()}"}))
+def scan_mode():
+    clone_dir = "/scan_repo/repo"
+    
+    if not os.path.exists(clone_dir):
+        print(json.dumps({"error": "Repository not found in volume. Clone step must have failed."}))
         sys.exit(1)
 
     findings = {
         "secrets": [],
         "sast": [],
-        "bandit": []
+        "bandit": [],
+        "scan_errors": []
     }
 
-    # 1. Run Gitleaks
-    gitleaks_cmd = ["gitleaks", "detect", "--no-git", "--report-format", "json", "--report-path", "/gitleaks.json"]
-    subprocess.run(gitleaks_cmd, cwd=clone_dir, capture_output=True)
-    if os.path.exists("/gitleaks.json"):
-        try:
-            with open("/gitleaks.json", "r") as f:
-                findings["secrets"] = json.load(f)
-        except:
-            pass
+    scanners = [
+        ("secrets", ["gitleaks", "detect", "--no-git", "--report-format", "json", "--report-path", "/tmp/gitleaks.json"], "/tmp/gitleaks.json"),
+        ("sast", ["semgrep", "scan", "--config=auto", "--json", "-o", "/tmp/semgrep.json"], "/tmp/semgrep.json"),
+        ("bandit", ["bandit", "-r", ".", "-f", "json", "-o", "/tmp/bandit.json"], "/tmp/bandit.json")
+    ]
 
-    # 2. Run Semgrep
-    semgrep_cmd = ["semgrep", "scan", "--config=auto", "--json", "-o", "/semgrep.json"]
-    subprocess.run(semgrep_cmd, cwd=clone_dir, capture_output=True)
-    if os.path.exists("/semgrep.json"):
-        try:
-            with open("/semgrep.json", "r") as f:
-                data = json.load(f)
-                findings["sast"] = data.get("results", [])
-        except:
-            pass
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(run_scanner, name, cmd, clone_dir, out_file): name 
+            for name, cmd, out_file in scanners
+        }
+        
+        for future in concurrent.futures.as_completed(futures):
+            name, data, err = future.result()
+            if err:
+                findings["scan_errors"].append(err)
+            elif data:
+                if name == "secrets":
+                    findings["secrets"] = data
+                elif name == "sast":
+                    findings["sast"] = data.get("results", [])
+                elif name == "bandit":
+                    findings["bandit"] = data.get("results", [])
 
-    # 3. Run Bandit
-    bandit_cmd = ["bandit", "-r", ".", "-f", "json", "-o", "/bandit.json"]
-    subprocess.run(bandit_cmd, cwd=clone_dir, capture_output=True)
-    if os.path.exists("/bandit.json"):
-        try:
-            with open("/bandit.json", "r") as f:
-                data = json.load(f)
-                findings["bandit"] = data.get("results", [])
-        except:
-            pass
-
-    # Output final aggregated JSON to stdout
     print(json.dumps(findings))
+
+def main():
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "No command provided. Use 'clone' or 'scan'."}))
+        sys.exit(1)
+
+    mode = sys.argv[1]
+    
+    if mode == "clone":
+        if len(sys.argv) < 3:
+            print("Missing repo_url for clone mode")
+            sys.exit(1)
+        clone_mode(sys.argv[2])
+    elif mode == "scan":
+        scan_mode()
+    else:
+        print(json.dumps({"error": f"Unknown mode: {mode}"}))
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

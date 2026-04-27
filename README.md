@@ -8,12 +8,16 @@
 
 ## ✨ Features
 
-- **🛡️ Secure Sandbox**: Uses Docker to build a temporary, isolated Ubuntu environment to scan code.
+- **🛡️ Secure Sandbox**: Uses Docker to build a temporary, isolated environment to scan code.
+- **🏗️ Two-Container Handoff Architecture**: 
+  - **Cloner Container**: Pulls the repository into an ephemeral Docker volume.
+  - **Scanner Container**: Mounts the volume as read-only. Operates with `network_disabled=True`, memory caps, and dropped privileges for absolute Zero-Trust isolation.
+- **⚡ Parallel Execution**: Utilizes multithreading to run all security tools concurrently, massively speeding up the audit phase.
 - **🔍 Triple-Threat Scanning**: Executes **Semgrep**, **Bandit**, and **Gitleaks** to detect SAST vulnerabilities, Python-specific issues, and hardcoded secrets.
 - **🌈 Immersive UI**: Features a character-by-character gradient banner and modern CLI decorators.
 - **📊 Detailed Reporting**:
   - **Terminal Tables**: Instant breakdown of findings by Severity, Category, and Description.
-  - **Monotone HTML Report**: Clean, professional security audit dashboards that auto-open in your browser.
+  - **Sanitized HTML Report**: Clean, XSS-protected professional security audit dashboards that auto-open in your browser.
   - **JSON Export**: Raw data for integration into other security tools.
 - **⚙️ Customizable Policies**:
   - **Strict Mode**: Automatically block malicious clones.
@@ -76,4 +80,5 @@ reposhield configure
 RepoShield treats every remote repository as potentially compromised. By requiring a successful sandbox scan before writing any data to your disk, it eliminates the risk of "clone-to-pwn" attacks and accidental secret leakage.
 
 ---
-*Built with ❤️ for a safer open-source ecosystem.*
+*Built By [Dealer-09](https://github.com/Dealer-09) for a safer open-source ecosystem.*
+_Based On [Reposhield-V2](https://github.com/rajdeep13-coder/Reposhield-V2) by [rajdeep13-coder](https://github.com/rajdeep13-coder) & [extremecoder-rgb](https://github.com/extremecoder-rgb)_

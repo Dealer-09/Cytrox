@@ -10,7 +10,13 @@ RUN pip install --no-cache-dir semgrep bandit
 # Copy gitleaks binary from the official image
 COPY --from=gitleaks /usr/bin/gitleaks /usr/bin/gitleaks
 
+# Create a non-root user
+RUN useradd -m -s /bin/bash scanner_user
+
 # Copy the orchestrator script
 COPY entrypoint.py /entrypoint.py
+
+# Switch to the non-root user
+USER scanner_user
 
 ENTRYPOINT ["python", "/entrypoint.py"]

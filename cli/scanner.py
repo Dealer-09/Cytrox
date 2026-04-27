@@ -37,35 +37,81 @@ def build_or_pull_image(client):
 
 def run_scan(repo_url: str) -> dict:
     """
-    Spins up the Docker container, passes the repo URL, and returns the parsed JSON results.
+    Orchestrates the two-container handoff for maximum security.
+    Container A: Network enabled, clones repo to volume.
+    Container B: Network disabled, read-only root, scans volume.
     """
     client = docker.from_env()
     build_or_pull_image(client)
     
+    import uuid
+    vol_name = f"reposhield_scan_{uuid.uuid4().hex}"
+    
     try:
-        # Run the container with auto-remove
-        logs = client.containers.run(
-            IMAGE_NAME,
-            command=[repo_url],
-            remove=True,
-            stdout=True,
-            stderr=False
-        )
-        # Parse the output
-        output_str = logs.decode("utf-8").strip()
+        # Create a volume to pass data between the two isolated containers
+        volume = client.volumes.create(name=vol_name)
         
+        # ---------------------------------------------------------
+        # Container A: The Cloner (Needs Network)
+        # ---------------------------------------------------------
         try:
-            return json.loads(output_str)
-        except json.JSONDecodeError:
-            console.print("[bold red]Failed to parse scanner output. Raw output:[/bold red]")
-            console.print(output_str)
-            return {"error": "Invalid output from scanner"}
+            client.containers.run(
+                IMAGE_NAME,
+                command=["clone", repo_url],
+                remove=True,
+                network_disabled=False,
+                volumes={vol_name: {'bind': '/scan_repo', 'mode': 'rw'}}
+            )
+        except docker.errors.ContainerError as e:
+            err_msg = e.stderr.decode("utf-8").strip() if e.stderr else str(e)
+            return {"error": f"Failed to clone repository during isolation phase: {err_msg}"}
+
+        # ---------------------------------------------------------
+        # Container B: The Scanner (Zero Network, Read-Only, Unprivileged)
+        # ---------------------------------------------------------
+        try:
+            logs = client.containers.run(
+                IMAGE_NAME,
+                command=["scan"],
+                remove=True,
+                stdout=True,
+                stderr=False,
+                mem_limit="512m",
+                nano_cpus=500000000,
+                network_disabled=True,
+                read_only=True,
+                tmpfs={"/tmp": ""},
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges:true"],
+                volumes={vol_name: {'bind': '/scan_repo', 'mode': 'ro'}}
+            )
+            # Parse the output
+            output_str = logs.decode("utf-8").strip()
             
-    except docker.errors.ContainerError as e:
-        console.print(f"[bold red]Scanner container failed to execute:[/bold red]\n{e.stderr.decode('utf-8')}")
-        return {"error": "Container execution failed"}
+            try:
+                return json.loads(output_str)
+            except json.JSONDecodeError:
+                console.print("[bold red]Failed to parse scanner output. Raw output:[/bold red]")
+                console.print(output_str)
+                return {"error": "Invalid JSON output from scanner"}
+                
+        except docker.errors.ContainerError as e:
+            err_msg = e.stderr.decode('utf-8') if e.stderr else str(e)
+            console.print(f"[bold red]Scanner container failed to execute:[/bold red]\n{err_msg}")
+            return {"error": "Scanner container execution failed"}
+            
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Unexpected error during scan orchestration: {str(e)}"}
+        
+    finally:
+        # Always clean up the volume to prevent leaks
+        try:
+            volume = client.volumes.get(vol_name)
+            volume.remove(force=True)
+        except docker.errors.NotFound:
+            pass
+        except Exception as e:
+            console.print(f"[yellow]Warning: Failed to cleanup volume {vol_name}: {e}[/yellow]")
 
 def parse_findings(findings: dict):
     """

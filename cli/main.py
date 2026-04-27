@@ -4,6 +4,10 @@ import sys
 import os
 import json
 from pathlib import Path
+
+# Fix Windows console emoji printing issues
+if sys.stdout.encoding.lower() != 'utf-8' and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 from rich.console import Console
 from rich.prompt import Confirm
 from rich.panel import Panel
@@ -86,24 +90,26 @@ def clone(
     ctx: typer.Context,
     repo_url: str
 ):
-    if not check_docker():
+    from services import is_docker_running, execute_scan, generate_report, execute_git_clone
+    
+    if not is_docker_running():
         prompt_docker_installation()
         
     console.print(f"[bold cyan]◇[/bold cyan] 🛡️  [bold blue]Initializing Secure Sandbox for:[/bold blue] {repo_url}")
-    
     console.print("[bold cyan]│[/bold cyan] ⏳ Pulling isolated scanner container and analyzing...")
     
-    # Run the scanner
-    from scanner import run_scan, parse_findings
-    findings = run_scan(repo_url)
-    
-    is_clean, summary, detailed_issues = parse_findings(findings)
-    
-    git_cmd = ["git", "clone", repo_url] + ctx.args
-
+    try:
+        is_clean, summary, detailed_issues, findings = execute_scan(repo_url)
+    except Exception as e:
+        console.print(f"[bold red]❌ Failed to execute scan: {e}[/bold red]")
+        raise typer.Exit(code=1)
+        
     if is_clean:
         console.print("[bold cyan]◇[/bold cyan] ✅ [bold green]Codebase is clean. Cloning to host...[/bold green]")
-        subprocess.run(git_cmd)
+        try:
+            execute_git_clone(repo_url, ctx.args)
+        except subprocess.CalledProcessError as e:
+            console.print(f"[bold red]❌ Clone failed: {e}[/bold red]")
     else:
         console.print(f"[bold cyan]◇[/bold cyan] [bold red]⚠️  Critical Issues Found![/bold red] {summary}")
         
@@ -125,25 +131,18 @@ def clone(
                     console.print(f"[bold cyan]│[/bold cyan] [bold yellow]...and {len(detailed_issues) - 15} more issues hidden.[/bold yellow]")
             
             if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to generate a detailed report?", default=False):
-                from report import generate_html_report
-                import webbrowser
-                # Write JSON
-                with open("reposhield_report.json", "w", encoding="utf-8") as f:
-                    json.dump(findings, f, indent=2)
-                    
-                # Write HTML
-                html_content = generate_html_report(repo_url, detailed_issues, is_clean, summary)
-                report_path = os.path.abspath("reposhield_report.html").replace("\\", "/")
-                with open(report_path, "w", encoding="utf-8") as f:
-                    f.write(html_content)
-                    
-                console.print(f"[bold green]✅ Here is your generated report: file:///{report_path}[/bold green]")
-                console.print("[bold cyan]│[/bold cyan] Opening report in your default web browser...")
-                console.print("[bold cyan]│[/bold cyan]")
                 try:
+                    with open("reposhield_report.json", "w", encoding="utf-8") as f:
+                        json.dump(findings, f, indent=2)
+                        
+                    report_path = generate_report(repo_url, detailed_issues, is_clean, summary)
+                    console.print(f"[bold green]✅ Here is your generated report: file:///{report_path}[/bold green]")
+                    
+                    console.print("[bold cyan]│[/bold cyan] Opening report in your default web browser...")
+                    import webbrowser
                     webbrowser.open(f"file:///{report_path}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    console.print(f"[bold red]❌ Failed to generate report: {e}[/bold red]")
         
         from config import load_config
         config = load_config()
@@ -153,7 +152,10 @@ def clone(
             raise typer.Exit(code=1)
             
         if Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to clone this to your host?", default=False):
-            subprocess.run(git_cmd)
+            try:
+                execute_git_clone(repo_url, ctx.args)
+            except subprocess.CalledProcessError as e:
+                console.print(f"[bold red]❌ Clone failed: {e}[/bold red]")
         else:
             console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
 

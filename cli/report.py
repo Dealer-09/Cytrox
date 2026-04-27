@@ -1,5 +1,6 @@
 import json
 import datetime
+import html
 from urllib.parse import urlparse
 
 def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, summary: str) -> str:
@@ -17,11 +18,14 @@ def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, s
     # Generate rows
     rows_html = ""
     for issue in detailed_issues:
+        sev = html.escape(str(issue.get('severity', 'UNKNOWN')))
+        cat = html.escape(str(issue.get('category', 'UNKNOWN')))
+        msg = html.escape(str(issue.get('message', 'N/A')))
         rows_html += f"""
             <tr>
-                <td>{issue.get('severity', 'UNKNOWN')}</td>
-                <td>{issue.get('category', 'UNKNOWN')}</td>
-                <td>{issue.get('message', 'N/A')}</td>
+                <td>{sev}</td>
+                <td>{cat}</td>
+                <td>{msg}</td>
             </tr>
         """
         
