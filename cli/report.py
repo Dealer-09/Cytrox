@@ -6,16 +6,24 @@ from urllib.parse import urlparse
 def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, summary: str) -> str:
     """
     Generates a minimalist, monotone HTML report based on the findings.
+    All user-controlled strings are escaped to prevent XSS.
     """
     
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     repo_name = urlparse(repo_url).path.strip('/')
     if not repo_name:
         repo_name = repo_url
+    
+    # Escape all user-controlled values before inserting into HTML
+    safe_repo_url = html.escape(repo_url)
+    safe_repo_name = html.escape(repo_name)
+    safe_summary = html.escape(summary)
+    safe_timestamp = html.escape(timestamp)
         
     status_text = "PASSED" if is_clean else "FAILED"
+    status_class = "status-passed" if is_clean else "status-failed"
     
-    # Generate rows
+    # Generate rows (already escaped in the original)
     rows_html = ""
     for issue in detailed_issues:
         sev = html.escape(str(issue.get('severity', 'UNKNOWN')))
@@ -41,7 +49,7 @@ def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, s
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RepoShield Audit Report: {repo_name}</title>
+    <title>RepoShield Audit Report: {safe_repo_name}</title>
     <style>
         body {{
             font-family: 'Courier New', Courier, monospace;
@@ -114,10 +122,10 @@ def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, s
     <h1>RepoShield Security Audit</h1>
     
     <div class="meta-info">
-        <p>Target Repository: <span>{repo_url}</span></p>
-        <p>Scan Date: <span>{timestamp}</span></p>
-        <p>Overall Status: <span class="{'status-passed' if is_clean else 'status-failed'}">{status_text}</span></p>
-        <p>Summary: <span>{summary}</span></p>
+        <p>Target Repository: <span>{safe_repo_url}</span></p>
+        <p>Scan Date: <span>{safe_timestamp}</span></p>
+        <p>Overall Status: <span class="{status_class}">{status_text}</span></p>
+        <p>Summary: <span>{safe_summary}</span></p>
     </div>
 
     <h2>Detailed Findings</h2>

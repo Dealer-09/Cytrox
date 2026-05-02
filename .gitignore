@@ -149,3 +149,5 @@ backend/venv/
 temp/
 tmp/
 *.tmp
+# Tests
+test_audit_fixes.py

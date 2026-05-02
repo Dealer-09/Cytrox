@@ -2,22 +2,31 @@ import typer
 import subprocess
 import sys
 import os
+import re
 import json
+import webbrowser
+import shutil
 from pathlib import Path
 
 # Fix Windows console emoji printing issues
-if sys.stdout.encoding.lower() != 'utf-8' and hasattr(sys.stdout, 'reconfigure'):
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8' and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
+
 from rich.console import Console
 from rich.prompt import Confirm
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+from rich.color import Color
 
 app = typer.Typer(help="RepoShield: Zero-Trust Git Clone CLI")
 console = Console()
 
-from rich.text import Text
-from rich.color import Color
+# Strict URL pattern — defense-in-depth (duplicated from services.py)
+URL_PATTERN = re.compile(
+    r'^(https://[a-zA-Z0-9._\-]+(/[a-zA-Z0-9._\-]+)*(/[a-zA-Z0-9._\-]+\.git)?/?'
+    r'|git@[a-zA-Z0-9._\-]+:[a-zA-Z0-9._\-/]+\.git)$'
+)
 
 def get_gradient_banner():
     banner_lines = [
@@ -90,7 +99,12 @@ def clone(
     ctx: typer.Context,
     repo_url: str
 ):
-    from services import is_docker_running, execute_scan, generate_report, execute_git_clone
+    from services import is_docker_running, execute_scan, generate_report, execute_git_clone, validate_repo_url
+    
+    # HOST-SIDE URL validation (defense-in-depth, duplicates container check)
+    if not validate_repo_url(repo_url):
+        console.print("[bold red]❌ Invalid repository URL. Only https:// and git@ protocols with valid characters are allowed.[/bold red]")
+        raise typer.Exit(code=1)
     
     if not is_docker_running():
         prompt_docker_installation()
@@ -132,15 +146,18 @@ def clone(
             
             if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to generate a detailed report?", default=False):
                 try:
-                    with open("reposhield_report.json", "w", encoding="utf-8") as f:
+                    # Write JSON report to safe directory
+                    reports_dir = Path(os.path.expanduser("~")) / ".reposhield" / "reports"
+                    reports_dir.mkdir(parents=True, exist_ok=True)
+                    json_path = reports_dir / "reposhield_report.json"
+                    with open(json_path, "w", encoding="utf-8") as f:
                         json.dump(findings, f, indent=2)
                         
                     report_path = generate_report(repo_url, detailed_issues, is_clean, summary)
-                    console.print(f"[bold green]✅ Here is your generated report: file:///{report_path}[/bold green]")
+                    console.print(f"[bold green]✅ Here is your generated report: {report_path}[/bold green]")
                     
                     console.print("[bold cyan]│[/bold cyan] Opening report in your default web browser...")
-                    import webbrowser
-                    webbrowser.open(f"file:///{report_path}")
+                    webbrowser.open(Path(report_path).as_uri())
                 except Exception as e:
                     console.print(f"[bold red]❌ Failed to generate report: {e}[/bold red]")
         
@@ -161,6 +178,8 @@ def clone(
 
 @app.command()
 def install():
+    from services import install_powershell_interceptor, get_alias_script
+    
     console.print("[bold cyan]◇[/bold cyan] [bold yellow]This will configure PowerShell to intercept `git clone` commands.[/bold yellow]")
     if not Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to proceed?"):
         console.print("[bold cyan]│[/bold cyan] Installation aborted.")
@@ -169,10 +188,6 @@ def install():
     # Reliably get PowerShell profile path without subprocess encoding issues
     documents_dir = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), 'Documents')
     ps_profile = os.path.join(documents_dir, 'WindowsPowerShell', 'Microsoft.PowerShell_profile.ps1')
-    
-    if not ps_profile:
-        console.print("[bold red]Could not determine PowerShell profile path.[/bold red]")
-        return
 
     profile_path = Path(ps_profile)
     profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -183,38 +198,19 @@ def install():
     else:
         current_exe = f'python "{os.path.abspath(__file__)}"'
 
-    alias_script = f"""
-# RepoShield Global Command
-function reposhield {{
-    {current_exe} $args
-}}
-
-# RepoShield Git Interceptor
-function git {{
-    if ($args[0] -eq 'clone') {{
-        {current_exe} clone $args[1..($args.Length-1)]
-    }} else {{
-        git.exe $args
-    }}
-}}
-"""
-    
-    # Check if already installed
+    # Check if already installed (full current version)
     if profile_path.exists():
         content = profile_path.read_text(encoding="utf-8")
-        if "RepoShield Global Command" in content:
+        if "RepoShield Global Command" in content and "RepoShield Git Interceptor" in content:
             console.print("[bold green]RepoShield is already fully installed and up to date![/bold green]")
             return
         
-        if "RepoShield Git Interceptor" in content:
+        if "RepoShield" in content:
             console.print("[bold yellow]Found old version of RepoShield. Updating to latest...[/bold yellow]")
-            # Remove old interceptor to avoid duplicates (simplified)
-            # We'll just append the new version if not fully present
+            # install_powershell_interceptor handles stripping old blocks before appending
 
-            
-    # Append to profile
-    with open(profile_path, "a", encoding="utf-8") as f:
-        f.write("\n" + alias_script)
+    # Delegate to services.py — single source of truth for the alias script
+    install_powershell_interceptor(current_exe, profile_path)
         
     console.print(f"[bold green]✅ Interceptor installed to {profile_path}[/bold green]")
     console.print("Please restart your terminal for the changes to take effect.")
@@ -263,6 +259,8 @@ def uninstall():
     """
     Removes RepoShield's integration from PowerShell and deletes configuration files.
     """
+    from services import strip_reposhield_blocks
+    
     console.print("[bold cyan]◇[/bold cyan] [bold red]This will remove RepoShield's integration from your system.[/bold red]")
     if not Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to proceed?"):
         return
@@ -277,17 +275,8 @@ def uninstall():
         if "# RepoShield" in content:
             console.print("[bold cyan]│[/bold cyan] Removing PowerShell interceptors...")
             
-            import re
-            # Pattern to match any RepoShield block in the profile
-            # We look for either Global Command or Git Interceptor markers and their respective functions
-            patterns = [
-                r"\s*# RepoShield Global Command.*?function reposhield \{.*?\}\s*",
-                r"\s*# RepoShield Git Interceptor.*?function git \{.*?\}\s*"
-            ]
-            
-            new_content = content
-            for p in patterns:
-                new_content = re.sub(p, "\n", new_content, flags=re.DOTALL)
+            # Use safe line-by-line parser instead of regex (prevents ReDoS)
+            new_content = strip_reposhield_blocks(content)
             
             profile_path.write_text(new_content.strip() + "\n", encoding="utf-8")
             console.print("[bold green]✅ PowerShell profile cleaned.[/bold green]")
@@ -300,7 +289,6 @@ def uninstall():
     home = Path(os.path.expanduser("~"))
     reposhield_dir = home / ".reposhield"
     if reposhield_dir.exists():
-        import shutil
         try:
             shutil.rmtree(reposhield_dir)
             console.print("[bold green]✅ Configuration directory (~/.reposhield) removed.[/bold green]")

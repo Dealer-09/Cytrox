@@ -1,7 +1,10 @@
 import os
 import json
+import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("reposhield")
 
 class RepoShieldConfig(BaseModel):
     version: str = "1.0"
@@ -28,8 +31,9 @@ def load_config() -> dict:
             # Validate with Pydantic
             valid_config = RepoShieldConfig(**data)
             return valid_config.model_dump()
-    except Exception:
-        # Fallback to default if corrupted or invalid
+    except Exception as e:
+        # Log a warning instead of silently swallowing the error
+        logger.warning(f"Config file corrupted or invalid, using defaults: {e}")
         default_cfg = RepoShieldConfig()
         return default_cfg.model_dump()
 
@@ -37,7 +41,8 @@ def save_config(config: dict):
     # Ensure it's valid before saving
     try:
         valid_config = RepoShieldConfig(**config)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Invalid config data provided, saving defaults instead: {e}")
         valid_config = RepoShieldConfig()
         
     config_path = get_config_path()

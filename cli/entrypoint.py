@@ -2,7 +2,31 @@ import sys
 import subprocess
 import json
 import os
+import re
 import concurrent.futures
+
+# Strict URL pattern: only https:// or git@ protocols with valid characters
+URL_PATTERN = re.compile(
+    r'^(https://[a-zA-Z0-9._\-]+(/[a-zA-Z0-9._\-]+)*(/[a-zA-Z0-9._\-]+\.git)?/?'
+    r'|git@[a-zA-Z0-9._\-]+:[a-zA-Z0-9._\-/]+\.git)$'
+)
+
+# Max total size of cloned repo (500MB) to prevent zip-bomb style attacks
+MAX_REPO_SIZE_BYTES = 500 * 1024 * 1024
+
+
+def get_dir_size(path):
+    """Recursively calculate directory size in bytes."""
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                total += os.path.getsize(fp)
+            except OSError:
+                pass
+    return total
+
 
 def run_scanner(name, cmd, cwd, output_file):
     env = os.environ.copy()
@@ -25,17 +49,19 @@ def run_scanner(name, cmd, cwd, output_file):
     except Exception as e:
         return name, None, f"{name} scan encountered an error: {str(e)}"
 
+
 def clone_mode(repo_url):
-    # Strict Validation
-    if not repo_url.startswith(("https://", "git@")):
-        print("Invalid repository URL format. Only https:// and git@ are allowed.", file=sys.stderr)
+    # Strict Validation with regex
+    if not URL_PATTERN.match(repo_url):
+        print("Invalid repository URL format. Only https:// and git@ URLs with valid characters are allowed.", file=sys.stderr)
         sys.exit(1)
 
     clone_dir = "/scan_repo/repo"
 
     try:
         clone_result = subprocess.run(
-            ["git", "clone", "--depth", "1", repo_url, clone_dir],
+            # Use -- to prevent option injection via repo_url
+            ["git", "clone", "--depth", "1", "--", repo_url, clone_dir],
             capture_output=True,
             text=True,
             timeout=300
@@ -43,10 +69,18 @@ def clone_mode(repo_url):
         if clone_result.returncode != 0:
             print(f"Failed to clone repository: {clone_result.stderr.strip()}", file=sys.stderr)
             sys.exit(1)
+
+        # Post-clone size check to prevent zip-bomb attacks
+        repo_size = get_dir_size(clone_dir)
+        if repo_size > MAX_REPO_SIZE_BYTES:
+            print(f"Repository size ({repo_size} bytes) exceeds limit ({MAX_REPO_SIZE_BYTES} bytes). Aborting.", file=sys.stderr)
+            sys.exit(1)
+
         print("Clone successful")
     except subprocess.TimeoutExpired:
         print("Git clone timed out after 300 seconds.", file=sys.stderr)
         sys.exit(1)
+
 
 def scan_mode():
     clone_dir = "/scan_repo/repo"
@@ -88,6 +122,7 @@ def scan_mode():
 
     print(json.dumps(findings))
 
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No command provided. Use 'clone' or 'scan'."}))
@@ -105,6 +140,7 @@ def main():
     else:
         print(json.dumps({"error": f"Unknown mode: {mode}"}))
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
