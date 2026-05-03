@@ -3,32 +3,44 @@ import datetime
 import html
 from urllib.parse import urlparse
 
-def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, summary: str) -> str:
+def generate_html_report(result) -> str:
     """
-    Generates a minimalist, monotone HTML report based on the findings.
+    Generates a minimalist, monotone HTML report from a ScanResult.
     All user-controlled strings are escaped to prevent XSS.
     """
     
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    repo_name = urlparse(repo_url).path.strip('/')
+    repo_name = urlparse(result.repo_url).path.strip('/')
     if not repo_name:
-        repo_name = repo_url
+        repo_name = result.repo_url
     
     # Escape all user-controlled values before inserting into HTML
-    safe_repo_url = html.escape(repo_url)
+    safe_repo_url = html.escape(result.repo_url)
     safe_repo_name = html.escape(repo_name)
-    safe_summary = html.escape(summary)
+    safe_summary = html.escape(result.summary)
     safe_timestamp = html.escape(timestamp)
         
-    status_text = "PASSED" if is_clean else "FAILED"
-    status_class = "status-passed" if is_clean else "status-failed"
+    status_text = "PASSED" if result.is_clean else "FAILED"
+    status_class = "status-passed" if result.is_clean else "status-failed"
     
-    # Generate rows (already escaped in the original)
+    # Generate rows from unified Finding objects
     rows_html = ""
-    for issue in detailed_issues:
-        sev = html.escape(str(issue.get('severity', 'UNKNOWN')))
-        cat = html.escape(str(issue.get('category', 'UNKNOWN')))
-        msg = html.escape(str(issue.get('message', 'N/A')))
+    for finding in result.findings:
+        sev = html.escape(finding.severity)
+        cat = html.escape(finding.category)
+        title = html.escape(finding.title)
+        detail = html.escape(finding.detail) if finding.detail else ""
+        file_info = html.escape(finding.file) if finding.file else ""
+        line_info = f":{finding.line}" if finding.line else ""
+        
+        # Build a rich description with file location when available
+        desc_parts = [title]
+        if detail and detail != title:
+            desc_parts.append(detail)
+        if file_info:
+            desc_parts.append(f"<em>{file_info}{line_info}</em>")
+        
+        msg = "<br>".join(desc_parts)
         rows_html += f"""
             <tr>
                 <td>{sev}</td>
@@ -37,12 +49,16 @@ def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, s
             </tr>
         """
         
-    if not detailed_issues:
+    if not result.findings:
         rows_html = """
             <tr>
                 <td colspan="3" class="text-center">No vulnerabilities found. Codebase is clean.</td>
             </tr>
         """
+
+    # Risk score display
+    score = result.risk_score
+    score_display = f"{score:.1f} / 10.0" if score > 0 else "0.0 (Clean)"
         
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -114,6 +130,10 @@ def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, s
             border-top: 1px solid #000000;
             padding-top: 10px;
         }}
+        em {{
+            font-style: italic;
+            color: #555;
+        }}
     </style>
 </head>
 <body>
@@ -125,6 +145,7 @@ def generate_html_report(repo_url: str, detailed_issues: list, is_clean: bool, s
         <p>Target Repository: <span>{safe_repo_url}</span></p>
         <p>Scan Date: <span>{safe_timestamp}</span></p>
         <p>Overall Status: <span class="{status_class}">{status_text}</span></p>
+        <p>Risk Score: <span>{score_display}</span></p>
         <p>Summary: <span>{safe_summary}</span></p>
     </div>
 

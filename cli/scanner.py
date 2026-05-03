@@ -166,74 +166,83 @@ def run_scan(repo_url: str) -> dict:
                 else:
                     console.print(f"[yellow]Warning: Failed to cleanup volume {vol_name}: {e}[/yellow]")
 
-def parse_findings(findings: dict):
+def parse_findings(raw: dict, repo_url: str = ""):
     """
-    Returns a tuple: (is_clean, summary_text, detailed_issues_list)
+    Normalizes raw scanner output into a unified ScanResult with Finding objects.
+    Applies config-based filtering (ignored severities/categories).
     """
-    if "error" in findings:
-        return False, findings["error"], []
-        
+    from models import Finding, ScanResult
     from config import load_config
+
+    result = ScanResult(repo_url=repo_url)
+
+    if "error" in raw:
+        result.errors.append(raw["error"])
+        result.verdict = "FAIL"
+        return result
+
+    all_findings = []
+
+    # Scan errors
+    for err in raw.get("scan_errors", []):
+        all_findings.append(Finding(
+            tool="scanner", type="error", category="Scanner Error",
+            severity="HIGH", title=err,
+        ))
+
+    # Gitleaks (secrets)
+    for r in raw.get("secrets", []):
+        all_findings.append(Finding(
+            tool="gitleaks", type="secret", category="Secret",
+            severity="CRITICAL",
+            file=r.get("File", ""),
+            line=r.get("StartLine"),
+            title=r.get("Description", "Hardcoded Secret"),
+            detail=r.get("Match", ""),
+        ))
+
+    # Semgrep (SAST)
+    for r in raw.get("sast", []):
+        severity = r.get("extra", {}).get("severity", "UNKNOWN")
+        if severity in ("ERROR", "WARNING"):
+            display_severity = "HIGH" if severity == "ERROR" else "MEDIUM"
+            all_findings.append(Finding(
+                tool="semgrep", type="sast", category="SAST",
+                severity=display_severity,
+                file=r.get("path", ""),
+                line=r.get("start", {}).get("line"),
+                title=r.get("check_id", "Vulnerability Detected"),
+                detail=r.get("extra", {}).get("message", ""),
+            ))
+
+    # Bandit (Python SAST)
+    for r in raw.get("bandit", []):
+        severity = r.get("issue_severity", "UNKNOWN")
+        if severity in ("HIGH", "MEDIUM"):
+            cwe_raw = r.get("issue_cwe")
+            cwe_id = str(cwe_raw.get("id", "")) if isinstance(cwe_raw, dict) else None
+            all_findings.append(Finding(
+                tool="bandit", type="sast", category="Python SAST",
+                severity=severity,
+                file=r.get("filename", ""),
+                line=r.get("line_number"),
+                title=r.get("test_name", "Security Issue"),
+                detail=r.get("issue_text", ""),
+                cwe=cwe_id,
+            ))
+
+    # Apply config-based filtering (backward-compatible with existing configs)
     config = load_config()
     ignored_severities = [s.upper() for s in config.get("ignored_severities", [])]
     ignored_categories = config.get("ignored_categories", [])
-        
-    detailed_issues = []
-    
-    # Check for scan errors
-    for err in findings.get("scan_errors", []):
-        detailed_issues.append({
-            "category": "Scanner Error",
-            "severity": "HIGH",
-            "message": err
-        })
-    
-    # Gitleaks results
-    for r in findings.get("secrets", []):
-        detailed_issues.append({
-            "category": "Secret",
-            "severity": "CRITICAL",
-            "message": r.get("Description", "Hardcoded Secret")
-        })
-    
-    # Semgrep results
-    for r in findings.get("sast", []):
-        severity = r.get("extra", {}).get("severity", "UNKNOWN")
-        if severity in ("ERROR", "WARNING"):
-            # Map ERROR to HIGH for consistency in the table
-            display_severity = "HIGH" if severity == "ERROR" else "MEDIUM"
-            detailed_issues.append({
-                "category": "SAST",
-                "severity": display_severity,
-                "message": r.get("check_id", "Vulnerability Detected")
-            })
-            
-    # Bandit results
-    for r in findings.get("bandit", []):
-        severity = r.get("issue_severity", "UNKNOWN")
-        if severity in ("HIGH", "MEDIUM"):
-            msg = f"{r.get('test_name', 'Security Issue')}: {r.get('issue_text', '')}"
-            detailed_issues.append({
-                "category": "Python SAST",
-                "severity": severity,
-                "message": msg
-            })
-            
-    # Apply filtering based on policy
-    filtered_issues = []
-    for issue in detailed_issues:
-        if issue["severity"] in ignored_severities:
+
+    for finding in all_findings:
+        if finding.severity in ignored_severities:
             continue
-        if issue["category"] in ignored_categories:
+        if finding.category in ignored_categories:
             continue
-        filtered_issues.append(issue)
-            
-    if not filtered_issues:
-        return True, "No issues found", []
-        
-    num_secrets = len([i for i in filtered_issues if i["category"] == "Secret"])
-    num_sast = len([i for i in filtered_issues if i["category"] == "SAST"])
-    num_bandit = len([i for i in filtered_issues if i["category"] == "Python SAST"])
-    
-    summary = f"Found {num_secrets} secrets, {num_sast} SAST vulnerabilities, and {num_bandit} Python specific issues."
-    return False, summary, filtered_issues
+        result.findings.append(finding)
+
+    result.verdict = "FAIL" if result.findings else "PASS"
+    result.raw_findings = raw
+    return result

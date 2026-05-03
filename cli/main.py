@@ -113,68 +113,82 @@ def clone(
     console.print("[bold cyan]│[/bold cyan] ⏳ Pulling isolated scanner container and analyzing...")
     
     try:
-        is_clean, summary, detailed_issues, findings = execute_scan(repo_url)
+        result = execute_scan(repo_url)
     except Exception as e:
         console.print(f"[bold red]❌ Failed to execute scan: {e}[/bold red]")
         raise typer.Exit(code=1)
+
+    # Handle scan errors (Docker failures, timeouts, etc.)
+    if result.errors and not result.findings:
+        console.print(f"[bold cyan]◇[/bold cyan] [bold red]❌ Scan Error:[/bold red] {result.summary}")
+        raise typer.Exit(code=2)
+
+    if result.verdict == "PASS":
+        console.print(f"[bold cyan]◇[/bold cyan] ✅ [bold green]Codebase is clean. Cloning to host...[/bold green] [dim]({result.scan_duration_seconds}s)[/dim]")
+        try:
+            execute_git_clone(repo_url, ctx.args)
+        except subprocess.CalledProcessError as e:
+            console.print(f"[bold red]❌ Clone failed: {e}[/bold red]")
+        return
+
+    # WARN or FAIL — show risk score and findings
+    score_color = "red" if result.risk_score >= 7 else "yellow" if result.risk_score >= 4 else "green"
+    console.print(f"[bold cyan]◇[/bold cyan] [bold red]⚠️  Issues Found![/bold red] {result.summary}")
+    console.print(f"[bold cyan]│[/bold cyan] Risk Score: [{score_color}]{result.risk_score}/10.0[/{score_color}]  Verdict: [bold {'red' if result.verdict == 'FAIL' else 'yellow'}]{result.verdict}[/bold {'red' if result.verdict == 'FAIL' else 'yellow'}]")
+    
+    if result.findings:
+        if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to see the details?", default=False):
+            table = Table(show_header=True, header_style="bold magenta", border_style="cyan")
+            table.add_column("Severity", style="red", width=12)
+            table.add_column("Category", style="yellow", width=15)
+            table.add_column("Description", style="white")
+            
+            # Show up to 15 issues so we don't flood the terminal
+            for finding in result.findings[:15]:
+                sev = finding.severity
+                severity_colored = f"[bold red]{sev}[/bold red]" if sev == "CRITICAL" else f"[red]{sev}[/red]"
+                desc = finding.title
+                if finding.file:
+                    desc += f" [dim]({finding.file}:{finding.line or '?'})[/dim]"
+                table.add_row(severity_colored, finding.category, desc)
+            
+            console.print(table)
+            if len(result.findings) > 15:
+                console.print(f"[bold cyan]│[/bold cyan] [bold yellow]...and {len(result.findings) - 15} more issues hidden.[/bold yellow]")
         
-    if is_clean:
-        console.print("[bold cyan]◇[/bold cyan] ✅ [bold green]Codebase is clean. Cloning to host...[/bold green]")
+        if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to generate a detailed report?", default=False):
+            try:
+                # Write JSON report to safe directory
+                reports_dir = Path(os.path.expanduser("~")) / ".reposhield" / "reports"
+                reports_dir.mkdir(parents=True, exist_ok=True)
+                json_path = reports_dir / "reposhield_report.json"
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(result.model_dump(), f, indent=2, default=str)
+                    
+                report_path = generate_report(result)
+                console.print(f"[bold green]✅ Here is your generated report: {report_path}[/bold green]")
+                
+                console.print("[bold cyan]│[/bold cyan] Opening report in your default web browser...")
+                webbrowser.open(Path(report_path).as_uri())
+            except Exception as e:
+                console.print(f"[bold red]❌ Failed to generate report: {e}[/bold red]")
+
+    # FAIL verdict = automatic block (replaces old strict_mode check)
+    if result.verdict == "FAIL":
+        from config import load_config
+        config = load_config()
+        console.print(f"[bold cyan]│[/bold cyan] [bold red]BLOCKED: Risk score {result.risk_score}/10.0 exceeds threshold {config.get('risk_threshold', 5.0)}.[/bold red]")
+        console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
+        raise typer.Exit(code=1)
+
+    # WARN verdict = user decides
+    if Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to clone this to your host?", default=False):
         try:
             execute_git_clone(repo_url, ctx.args)
         except subprocess.CalledProcessError as e:
             console.print(f"[bold red]❌ Clone failed: {e}[/bold red]")
     else:
-        console.print(f"[bold cyan]◇[/bold cyan] [bold red]⚠️  Critical Issues Found![/bold red] {summary}")
-        
-        if detailed_issues:
-            if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to see the details?", default=False):
-                table = Table(show_header=True, header_style="bold magenta", border_style="cyan")
-                table.add_column("Severity", style="red", width=12)
-                table.add_column("Category", style="yellow", width=15)
-                table.add_column("Description", style="white")
-                
-                # Show up to 15 issues so we don't flood the terminal
-                for issue in detailed_issues[:15]:
-                    sev = issue['severity']
-                    severity_colored = f"[bold red]{sev}[/bold red]" if sev == "CRITICAL" else f"[red]{sev}[/red]"
-                    table.add_row(severity_colored, issue['category'], issue['message'])
-                
-                console.print(table)
-                if len(detailed_issues) > 15:
-                    console.print(f"[bold cyan]│[/bold cyan] [bold yellow]...and {len(detailed_issues) - 15} more issues hidden.[/bold yellow]")
-            
-            if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to generate a detailed report?", default=False):
-                try:
-                    # Write JSON report to safe directory
-                    reports_dir = Path(os.path.expanduser("~")) / ".reposhield" / "reports"
-                    reports_dir.mkdir(parents=True, exist_ok=True)
-                    json_path = reports_dir / "reposhield_report.json"
-                    with open(json_path, "w", encoding="utf-8") as f:
-                        json.dump(findings, f, indent=2)
-                        
-                    report_path = generate_report(repo_url, detailed_issues, is_clean, summary)
-                    console.print(f"[bold green]✅ Here is your generated report: {report_path}[/bold green]")
-                    
-                    console.print("[bold cyan]│[/bold cyan] Opening report in your default web browser...")
-                    webbrowser.open(Path(report_path).as_uri())
-                except Exception as e:
-                    console.print(f"[bold red]❌ Failed to generate report: {e}[/bold red]")
-        
-        from config import load_config
-        config = load_config()
-        if config.get("strict_mode", False):
-            console.print("[bold cyan]│[/bold cyan] [bold red]STRICT MODE ENABLED: Automatically blocking clone.[/bold red]")
-            console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
-            raise typer.Exit(code=1)
-            
-        if Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to clone this to your host?", default=False):
-            try:
-                execute_git_clone(repo_url, ctx.args)
-            except subprocess.CalledProcessError as e:
-                console.print(f"[bold red]❌ Clone failed: {e}[/bold red]")
-        else:
-            console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
+        console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
 
 @app.command()
 def install():

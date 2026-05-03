@@ -11,6 +11,9 @@ class RepoShieldConfig(BaseModel):
     ignored_severities: list[str] = Field(default_factory=list)
     ignored_categories: list[str] = Field(default_factory=list)
     strict_mode: bool = False
+    risk_threshold: float = 5.0         # Risk score >= this triggers FAIL verdict
+    block_on_secrets: bool = True       # Always FAIL if secrets are found
+    block_on_critical: bool = True      # Always FAIL if CRITICAL severity found
 
 def get_config_path() -> Path:
     home = Path(os.path.expanduser("~"))

@@ -24,18 +24,31 @@ def validate_repo_url(repo_url: str) -> bool:
     return bool(URL_PATTERN.match(repo_url))
 
 def execute_scan(repo_url: str):
-    """Executes the security scan via docker and parses findings."""
+    """Executes the security scan via docker, scores risk, and evaluates policy."""
     from scanner import run_scan, parse_findings
-    findings = run_scan(repo_url)
-    is_clean, summary, detailed_issues = parse_findings(findings)
-    return is_clean, summary, detailed_issues, findings
+    from scoring import calculate_risk_score
+    from policy import evaluate_policy
+    from config import load_config
+    import time
 
-def generate_report(repo_url: str, detailed_issues: list, is_clean: bool, summary: str) -> str:
+    start = time.time()
+    raw_findings = run_scan(repo_url)
+    result = parse_findings(raw_findings, repo_url)
+    result.scan_duration_seconds = round(time.time() - start, 2)
+
+    # Score risk and evaluate policy
+    result.risk_score = calculate_risk_score(result.findings)
+    config = load_config()
+    result.verdict = evaluate_policy(result, config)
+
+    return result
+
+def generate_report(result) -> str:
     """Generates the HTML report in ~/.reposhield/reports/ and returns its absolute path."""
     from report import generate_html_report
     import datetime
 
-    html_content = generate_html_report(repo_url, detailed_issues, is_clean, summary)
+    html_content = generate_html_report(result)
 
     # Write to a safe, predictable directory instead of CWD
     reports_dir = Path(os.path.expanduser("~")) / ".reposhield" / "reports"
