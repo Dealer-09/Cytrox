@@ -231,6 +231,17 @@ def parse_findings(raw: dict, repo_url: str = ""):
                 cwe=cwe_id,
             ))
 
+    # Hook scanner (install hooks & CI/CD poisoning)
+    for r in raw.get("hooks", []):
+        all_findings.append(Finding(
+            tool="hook-scanner", type="hook", category="Install Hook",
+            severity=r.get("severity", "HIGH"),
+            file=r.get("file", ""),
+            line=r.get("line"),
+            title=r.get("description", "Suspicious install hook"),
+            detail=r.get("match", ""),
+        ))
+
     # Apply config-based filtering (backward-compatible with existing configs)
     config = load_config()
     ignored_severities = [s.upper() for s in config.get("ignored_severities", [])]
