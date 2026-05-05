@@ -19,6 +19,7 @@ RUN useradd -m -s /bin/bash scanner_user && \
 # Copy the orchestrator and custom scanner scripts
 COPY entrypoint.py /entrypoint.py
 COPY hook_scanner.py /hook_scanner.py
+COPY anomaly_scanner.py /anomaly_scanner.py
 
 # Switch to the non-root user (used for both clone and scan containers)
 USER scanner_user

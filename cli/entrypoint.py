@@ -94,6 +94,7 @@ def scan_mode():
         "sast": [],
         "bandit": [],
         "hooks": [],
+        "anomalies": [],
         "scan_errors": []
     }
 
@@ -101,10 +102,11 @@ def scan_mode():
         ("secrets", ["gitleaks", "detect", "--no-git", "--report-format", "json", "--report-path", "/tmp/gitleaks.json"], "/tmp/gitleaks.json"),
         ("sast", ["semgrep", "scan", "--config=/semgrep-rules/default.yml", "--json", "-o", "/tmp/semgrep.json"], "/tmp/semgrep.json"),
         ("bandit", ["bandit", "-r", ".", "-f", "json", "-o", "/tmp/bandit.json"], "/tmp/bandit.json"),
-        ("hooks", ["python", "/hook_scanner.py", ".", "/tmp/hooks.json"], "/tmp/hooks.json")
+        ("hooks", ["python", "/hook_scanner.py", ".", "/tmp/hooks.json"], "/tmp/hooks.json"),
+        ("anomalies", ["python", "/anomaly_scanner.py", ".", "/tmp/anomalies.json"], "/tmp/anomalies.json")
     ]
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = {
             executor.submit(run_scanner, name, cmd, clone_dir, out_file): name 
             for name, cmd, out_file in scanners
@@ -123,6 +125,8 @@ def scan_mode():
                     findings["bandit"] = data.get("results", [])
                 elif name == "hooks":
                     findings["hooks"] = data
+                elif name == "anomalies":
+                    findings["anomalies"] = data
 
     print(json.dumps(findings))
 
