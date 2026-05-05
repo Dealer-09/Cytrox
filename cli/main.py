@@ -107,11 +107,14 @@ def clone(
     Exit codes: 0 = clean (PASS), 1 = blocked (FAIL), 2 = scanner error, 3 = invalid input
     """
     from services import is_docker_running, execute_scan, generate_report, execute_git_clone, validate_repo_url
+    from logger import ScanLogger
     
+    scan_log = ScanLogger()
     json_mode = output.lower() == "json"
     
     # HOST-SIDE URL validation (defense-in-depth, duplicates container check)
     if not validate_repo_url(repo_url):
+        scan_log.log_error("Invalid repository URL", context=repo_url)
         if json_mode:
             print(json.dumps({"error": "Invalid repository URL", "exit_code": 3}))
         else:
@@ -127,6 +130,8 @@ def clone(
             raise typer.Exit(code=2)
         prompt_docker_installation()
     
+    scan_log.log_scan_start(repo_url, auto_mode=auto, output_format=output)
+    
     if not json_mode:
         console.print(f"[bold cyan]◇[/bold cyan] 🛡️  [bold blue]Initializing Secure Sandbox for:[/bold blue] {repo_url}")
         console.print("[bold cyan]│[/bold cyan] ⏳ Pulling isolated scanner container and analyzing...")
@@ -138,10 +143,15 @@ def clone(
             print(json.dumps({"error": str(e), "exit_code": 2}))
         else:
             console.print(f"[bold red]❌ Failed to execute scan: {e}[/bold red]")
+        scan_log.log_error(str(e), context="execute_scan")
         raise typer.Exit(code=2)
+
+    # Log scan completion for all output modes
+    scan_log.log_scan_complete(result)
 
     # ── JSON output mode ────────────────────────────────────────
     if json_mode:
+        scan_log.log_verdict(result.verdict, "json_output")
         print(json.dumps(result.model_dump(), indent=2, default=str))
         exit_code = 0 if result.verdict == "PASS" else 1
         raise typer.Exit(code=exit_code)
@@ -154,6 +164,7 @@ def clone(
     # ── PASS verdict ────────────────────────────────────────────
     if result.verdict == "PASS":
         console.print(f"[bold cyan]◇[/bold cyan] ✅ [bold green]Codebase is clean. Cloning to host...[/bold green] [dim]({result.scan_duration_seconds}s)[/dim]")
+        scan_log.log_verdict("PASS", "clone")
         try:
             execute_git_clone(repo_url, ctx.args)
         except subprocess.CalledProcessError as e:
@@ -208,6 +219,7 @@ def clone(
         config = load_config()
         console.print(f"[bold cyan]│[/bold cyan] [bold red]BLOCKED: Risk score {result.risk_score}/10.0 exceeds threshold {config.get('risk_threshold', 5.0)}.[/bold red]")
         console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
+        scan_log.log_verdict("FAIL", "blocked")
         raise typer.Exit(code=1)
 
     # ── WARN verdict ────────────────────────────────────────────
@@ -224,6 +236,7 @@ def clone(
         except subprocess.CalledProcessError as e:
             console.print(f"[bold red]❌ Clone failed: {e}[/bold red]")
     else:
+        scan_log.log_verdict("WARN", "user_aborted")
         console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
 
 @app.command()
