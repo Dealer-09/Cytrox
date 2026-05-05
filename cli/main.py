@@ -97,32 +97,61 @@ RepoShield requires Docker to safely isolate and scan code before it touches you
 @app.command(context_settings={"ignore_unknown_options": True})
 def clone(
     ctx: typer.Context,
-    repo_url: str
+    repo_url: str,
+    output: str = typer.Option("table", help="Output format: 'table' (default) or 'json'"),
+    auto: bool = typer.Option(False, help="Non-interactive mode. Uses policy engine verdict without prompts."),
 ):
+    """
+    Clone a repository through RepoShield's security sandbox.
+    
+    Exit codes: 0 = clean (PASS), 1 = blocked (FAIL), 2 = scanner error, 3 = invalid input
+    """
     from services import is_docker_running, execute_scan, generate_report, execute_git_clone, validate_repo_url
+    
+    json_mode = output.lower() == "json"
     
     # HOST-SIDE URL validation (defense-in-depth, duplicates container check)
     if not validate_repo_url(repo_url):
-        console.print("[bold red]❌ Invalid repository URL. Only https:// and git@ protocols with valid characters are allowed.[/bold red]")
-        raise typer.Exit(code=1)
+        if json_mode:
+            print(json.dumps({"error": "Invalid repository URL", "exit_code": 3}))
+        else:
+            console.print("[bold red]❌ Invalid repository URL. Only https:// and git@ protocols with valid characters are allowed.[/bold red]")
+        raise typer.Exit(code=3)
     
     if not is_docker_running():
+        if auto:
+            if json_mode:
+                print(json.dumps({"error": "Docker is not running", "exit_code": 2}))
+            else:
+                console.print("[bold red]❌ Docker is not running. Cannot scan in auto mode.[/bold red]")
+            raise typer.Exit(code=2)
         prompt_docker_installation()
-        
-    console.print(f"[bold cyan]◇[/bold cyan] 🛡️  [bold blue]Initializing Secure Sandbox for:[/bold blue] {repo_url}")
-    console.print("[bold cyan]│[/bold cyan] ⏳ Pulling isolated scanner container and analyzing...")
+    
+    if not json_mode:
+        console.print(f"[bold cyan]◇[/bold cyan] 🛡️  [bold blue]Initializing Secure Sandbox for:[/bold blue] {repo_url}")
+        console.print("[bold cyan]│[/bold cyan] ⏳ Pulling isolated scanner container and analyzing...")
     
     try:
         result = execute_scan(repo_url)
     except Exception as e:
-        console.print(f"[bold red]❌ Failed to execute scan: {e}[/bold red]")
-        raise typer.Exit(code=1)
+        if json_mode:
+            print(json.dumps({"error": str(e), "exit_code": 2}))
+        else:
+            console.print(f"[bold red]❌ Failed to execute scan: {e}[/bold red]")
+        raise typer.Exit(code=2)
 
-    # Handle scan errors (Docker failures, timeouts, etc.)
+    # ── JSON output mode ────────────────────────────────────────
+    if json_mode:
+        print(json.dumps(result.model_dump(), indent=2, default=str))
+        exit_code = 0 if result.verdict == "PASS" else 1
+        raise typer.Exit(code=exit_code)
+
+    # ── Handle scan errors (Docker failures, timeouts, etc.) ───
     if result.errors and not result.findings:
         console.print(f"[bold cyan]◇[/bold cyan] [bold red]❌ Scan Error:[/bold red] {result.summary}")
         raise typer.Exit(code=2)
 
+    # ── PASS verdict ────────────────────────────────────────────
     if result.verdict == "PASS":
         console.print(f"[bold cyan]◇[/bold cyan] ✅ [bold green]Codebase is clean. Cloning to host...[/bold green] [dim]({result.scan_duration_seconds}s)[/dim]")
         try:
@@ -131,12 +160,12 @@ def clone(
             console.print(f"[bold red]❌ Clone failed: {e}[/bold red]")
         return
 
-    # WARN or FAIL — show risk score and findings
+    # ── WARN or FAIL — show risk score and findings ─────────────
     score_color = "red" if result.risk_score >= 7 else "yellow" if result.risk_score >= 4 else "green"
     console.print(f"[bold cyan]◇[/bold cyan] [bold red]⚠️  Issues Found![/bold red] {result.summary}")
     console.print(f"[bold cyan]│[/bold cyan] Risk Score: [{score_color}]{result.risk_score}/10.0[/{score_color}]  Verdict: [bold {'red' if result.verdict == 'FAIL' else 'yellow'}]{result.verdict}[/bold {'red' if result.verdict == 'FAIL' else 'yellow'}]")
     
-    if result.findings:
+    if result.findings and not auto:
         if Confirm.ask("[bold cyan]◇[/bold cyan] Do you want to see the details?", default=False):
             table = Table(show_header=True, header_style="bold magenta", border_style="cyan")
             table.add_column("Severity", style="red", width=12)
@@ -173,7 +202,7 @@ def clone(
             except Exception as e:
                 console.print(f"[bold red]❌ Failed to generate report: {e}[/bold red]")
 
-    # FAIL verdict = automatic block (replaces old strict_mode check)
+    # ── FAIL verdict = automatic block ──────────────────────────
     if result.verdict == "FAIL":
         from config import load_config
         config = load_config()
@@ -181,8 +210,15 @@ def clone(
         console.print("[bold cyan]│[/bold cyan] 🚫 Clone aborted. Your machine remains safe.")
         raise typer.Exit(code=1)
 
-    # WARN verdict = user decides
-    if Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to clone this to your host?", default=False):
+    # ── WARN verdict ────────────────────────────────────────────
+    if auto:
+        # Auto mode: WARN = allow clone (only FAIL blocks)
+        console.print(f"[bold cyan]◇[/bold cyan] [bold yellow]AUTO MODE:[/bold yellow] Verdict is WARN — proceeding with clone.")
+        try:
+            execute_git_clone(repo_url, ctx.args)
+        except subprocess.CalledProcessError as e:
+            console.print(f"[bold red]❌ Clone failed: {e}[/bold red]")
+    elif Confirm.ask("[bold cyan]◇[/bold cyan] Are you sure you want to clone this to your host?", default=False):
         try:
             execute_git_clone(repo_url, ctx.args)
         except subprocess.CalledProcessError as e:
