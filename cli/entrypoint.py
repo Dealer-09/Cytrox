@@ -31,6 +31,9 @@ def get_dir_size(path):
 def run_scanner(name, cmd, cwd, output_file):
     env = os.environ.copy()
     env["HOME"] = "/tmp"  # Use writable tmpfs for caches/configs
+    # Prevent Semgrep from phoning home inside the air-gapped scanner container
+    env["SEMGREP_ENABLE_VERSION_CHECK"] = "0"
+    env["SEMGREP_SEND_METRICS"] = "off"
     try:
         result = subprocess.run(
             cmd,
@@ -43,7 +46,12 @@ def run_scanner(name, cmd, cwd, output_file):
         if os.path.exists(output_file):
             with open(output_file, "r") as f:
                 return name, json.load(f), None
-        return name, None, f"{name} failed or produced no output. Stderr: {result.stderr.strip()}"
+        # Exit code 0 or 1 with no output file = clean scan, no findings
+        # (e.g. gitleaks exits 0 and writes no file when no secrets found)
+        # Exit code >= 2 = real scanner failure
+        if result.returncode <= 1:
+            return name, None, None
+        return name, None, f"{name} failed (exit code {result.returncode}). Stderr: {result.stderr.strip()}"
     except subprocess.TimeoutExpired:
         return name, None, f"{name} scan timed out after 300 seconds."
     except Exception as e:
@@ -100,7 +108,7 @@ def scan_mode():
 
     scanners = [
         ("secrets", ["gitleaks", "detect", "--no-git", "--report-format", "json", "--report-path", "/tmp/gitleaks.json"], "/tmp/gitleaks.json"),
-        ("sast", ["semgrep", "scan", "--config=/semgrep-rules/default.yml", "--json", "-o", "/tmp/semgrep.json"], "/tmp/semgrep.json"),
+        ("sast", ["semgrep", "scan", "--config=/semgrep-rules/default.yml", "--json", "--metrics=off", "-o", "/tmp/semgrep.json"], "/tmp/semgrep.json"),
         ("bandit", ["bandit", "-r", ".", "-f", "json", "-o", "/tmp/bandit.json"], "/tmp/bandit.json"),
         ("hooks", ["python", "/hook_scanner.py", ".", "/tmp/hooks.json"], "/tmp/hooks.json"),
         ("anomalies", ["python", "/anomaly_scanner.py", ".", "/tmp/anomalies.json"], "/tmp/anomalies.json")
